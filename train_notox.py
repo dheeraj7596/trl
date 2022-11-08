@@ -507,6 +507,7 @@ def main():
             accelerator.device)
         return res
 
+    loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
     for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(train_dataloader))):
         logs, timing = dict(), dict()
         t0 = time.time()
@@ -522,14 +523,22 @@ def main():
             response_tensors.append(response.squeeze()[-gen_len:])
         batch['response'] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
         timing['time/get_response'] = time.time() - t
-        print("Response", batch['response'])
 
         #### Compute Rewards
         t = time.time()
         texts = [q + r for q, r in zip(batch['query'], batch['response'])]
         res = toxic_tokenize(texts)
+        batch_size = len(texts)
         with torch.no_grad():
-            rewards = torch.exp(gpt2_tox_model(**res).loss).to(accelerator.device)
+            outputs = gpt2_tox_model(**res)
+            lm_logits = outputs.logits
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_labels = res['labels'][..., 1:].contiguous()
+            loss_vec = loss_fct(shift_logits.view(-1, shift_logits.size(-1)),
+                                shift_labels.view(-1)).detach().cpu().numpy()
+            loss_vec = loss_vec.reshape((batch_size, -1))
+            loss_vec = loss_vec.sum(axis=-1) / np.count_nonzero(loss_vec, axis=-1)
+            rewards = torch.tensor(np.exp(loss_vec)).to(accelerator.device)
         timing['time/get_toxic_preds'] = time.time() - t
 
         #### Run PPO step
