@@ -244,8 +244,8 @@ def main():
 
     config = {
         "model_name": "gpt2",
-        "steps": 10000,
-        "batch_size": 256,
+        "steps": 20000,
+        "batch_size": 128,
         "forward_batch_size": 16,
         "ppo_epochs": 4,
         "txt_in_min_len": 10,
@@ -412,9 +412,9 @@ def main():
         )
 
     gen_kwargs = {
-        "min_length": -1,
-        "top_k": 0.0,
-        "top_p": 1.0,
+        # "min_length": -1,
+        "min_length": config["txt_out_min_len"],
+        "top_k": 10,
         "do_sample": True,
         "pad_token_id": tokenizer.eos_token_id
     }
@@ -501,7 +501,8 @@ def main():
     total_ppo_epochs = int(np.ceil(config["steps"] / config['batch_size']))
 
     def toxic_tokenize(texts):
-        res = tokenizer(texts, max_length=(config["txt_in_max_len"] + config["txt_out_max_len"]), pad_to_max_length=True,
+        res = tokenizer(texts, max_length=(config["txt_in_max_len"] + config["txt_out_max_len"]),
+                        pad_to_max_length=True,
                         return_tensors="pt").to(accelerator.device)
         res["labels"] = torch.tensor(res["input_ids"]).masked_fill(torch.tensor(res["attention_mask"]) == 0, -100).to(
             accelerator.device)
@@ -519,7 +520,7 @@ def main():
         for i in range(config['batch_size']):
             gen_len = output_size()
             response = gpt2_model.generate(query_tensors[i].unsqueeze(dim=0),
-                                           max_new_tokens=gen_len, **gen_kwargs)
+                                           max_length=len(query_tensors[i]) + gen_len, **gen_kwargs)
             response_tensors.append(response.squeeze()[-gen_len:])
         batch['response'] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
         timing['time/get_response'] = time.time() - t
