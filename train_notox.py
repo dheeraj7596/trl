@@ -244,7 +244,7 @@ def main():
 
     config = {
         "model_name": "gpt2",
-        "steps": 200,
+        "steps": 10000,
         "batch_size": 256,
         "forward_batch_size": 16,
         "ppo_epochs": 4,
@@ -501,7 +501,7 @@ def main():
     total_ppo_epochs = int(np.ceil(config["steps"] / config['batch_size']))
 
     def toxic_tokenize(texts):
-        res = tokenizer(texts, max_length=config["txt_in_max_len"] + config["txt_out_max_len"], pad_to_max_length=True,
+        res = tokenizer(texts, max_length=(config["txt_in_max_len"] + config["txt_out_max_len"]), pad_to_max_length=True,
                         return_tensors="pt").to(accelerator.device)
         res["labels"] = torch.tensor(res["input_ids"]).masked_fill(torch.tensor(res["attention_mask"]) == 0, -100).to(
             accelerator.device)
