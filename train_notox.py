@@ -23,13 +23,12 @@ https://huggingface.co/models?filter=text-generation
 # You can also adapt this script on your own causal language modeling task. Pointers for this are left as comments.
 
 import argparse
-import pickle
 import logging
-import math
 import os
+import time
 import random
 from itertools import chain
-from pathlib import Path
+import numpy as np
 
 import datasets
 import torch
@@ -52,9 +51,17 @@ from transformers import (
     get_scheduler,
     set_seed,
 )
+from trl.gpt2 import GPT2HeadWithValueModel
+from trl.ppo import PPOTrainer
 # from transformers.file_utils import get_full_repo_name
 from transformers.utils.versions import require_version
 
+try:
+    import wandb
+
+    USE_WANDB = True
+except:
+    USE_WANDB = False
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +69,14 @@ require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/lang
 
 MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+
+
+class LengthSampler:
+    def __init__(self, min_value, max_value):
+        self.values = list(range(min_value, max_value))
+
+    def __call__(self):
+        return np.random.choice(self.values)
 
 
 def parse_args():
@@ -219,9 +234,36 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if USE_WANDB:
+        accelerator = (
+            Accelerator(log_with="wandb", logging_dir=args.output_dir)
+        )
+        accelerator.init_trackers("NoTox", init_kwargs={"wandb": {"dir": args.output_dir}})
+    else:
+        accelerator = Accelerator()
+
+    config = {
+        "model_name": "gpt2",
+        "steps": 20000,
+        "batch_size": 256,
+        "forward_batch_size": 16,
+        "ppo_epochs": 4,
+        "txt_in_min_len": 2,
+        "txt_in_max_len": 20,
+        "txt_out_min_len": 4,
+        "txt_out_max_len": 40,
+        "lr": 1.41e-5,
+        "init_kl_coef": 0.2,
+        "target": 6,
+        "horizon": 10000,
+        "gamma": 1,
+        "lam": 0.95,
+        "cliprange": .2,
+        "cliprange_value": .2,
+        "vf_coef": .1,
+    }
 
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
-    accelerator = Accelerator()
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -317,13 +359,6 @@ def main():
     #
     # In distributed training, the .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
-    if args.config_name:
-        config = AutoConfig.from_pretrained(args.config_name)
-    elif args.model_name_or_path:
-        config = AutoConfig.from_pretrained(args.model_name_or_path)
-    else:
-        config = CONFIG_MAPPING[args.model_type]()
-        logger.warning("You are instantiating a new config instance from scratch.")
 
     if args.tokenizer_name:
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, use_fast=not args.use_slow_tokenizer)
@@ -336,42 +371,53 @@ def main():
         )
     tokenizer.pad_token = tokenizer.eos_token
 
-    if args.model_name_or_path:
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-        )
-    else:
-        logger.info("Training new model from scratch")
-        model = AutoModelForCausalLM.from_config(config)
+    tox_config = AutoConfig.from_pretrained(args.model_name_or_path)
 
-    model.resize_token_embeddings(len(tokenizer))
+    gpt2_model = GPT2HeadWithValueModel.from_pretrained('gpt2')
+    gpt2_model_ref = GPT2HeadWithValueModel.from_pretrained('gpt2')
+    gpt2_tox_model = AutoModelForCausalLM.from_pretrained(
+        args.model_name_or_path,
+        from_tf=bool(".ckpt" in args.model_name_or_path),
+        config=tox_config,
+    )
+
+    gpt2_model.resize_token_embeddings(len(tokenizer))
+    gpt2_model_ref.resize_token_embeddings(len(tokenizer))
+    gpt2_tox_model.resize_token_embeddings(len(tokenizer))
+
+    if USE_WANDB:
+        wandb.watch(gpt2_model, log='all')
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
     column_names = raw_datasets["train"].column_names
     text_column_name = "text" if "text" in column_names else column_names[0]
 
-    def tokenize_function(examples):
-        res = tokenizer(examples[text_column_name],
-                        max_length=tokenizer.model_max_length,  # Pad & truncate all sentences.
-                        pad_to_max_length=True,
-                        truncation=True,
-                        )
-        res["labels"] = torch.tensor(res["input_ids"]).masked_fill(torch.tensor(res["attention_mask"]) == 0,
-                                                                   -100).numpy()
-        return res
+    input_size = LengthSampler(config["txt_in_min_len"], config["txt_in_max_len"])
+    output_size = LengthSampler(config["txt_out_min_len"], config["txt_out_max_len"])
+
+    def tokenize(sample):
+        sample["tokens"] = tokenizer.encode(sample[text_column_name])[:input_size()]
+        sample["query"] = tokenizer.decode(sample["tokens"])
+        return sample
 
     with accelerator.main_process_first():
         lm_datasets = raw_datasets.map(
-            tokenize_function,
-            batched=True,
+            tokenize,
+            batched=False,
             num_proc=args.preprocessing_num_workers,
             remove_columns=column_names,
             load_from_cache_file=not args.overwrite_cache,
             desc="Running tokenizer on dataset",
         )
+
+    gen_kwargs = {
+        "min_length": -1,
+        "top_k": 0.0,
+        "top_p": 1.0,
+        "do_sample": True,
+        "pad_token_id": tokenizer.eos_token_id
+    }
 
     if args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -443,155 +489,69 @@ def main():
         eval_dataset, collate_fn=default_data_collator, batch_size=args.per_device_eval_batch_size
     )
 
-    # Optimizer
-    # Split weights in two groups, one with weight decay and the other not.
-    no_decay = ["bias", "LayerNorm.weight"]
-    optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-            "weight_decay": args.weight_decay,
-        },
-        {
-            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
-            "weight_decay": 0.0,
-        },
-    ]
-    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
-
-    # Prepare everything with our `accelerator`.
-    if args.analyze_answers:
-        model, optimizer, train_dataloader, eval_dataloader, anal_dataloader = accelerator.prepare(
-            model, optimizer, train_dataloader, eval_dataloader, anal_dataloader
-        )
-    else:
-        model, optimizer, train_dataloader, eval_dataloader = accelerator.prepare(
-            model, optimizer, train_dataloader, eval_dataloader
-        )
-
-    # On TPU, the tie weights in our model have been disconnected, so we need to restore the ties.
-    if accelerator.distributed_type == DistributedType.TPU:
-        model.tie_weights()
-
-    # Note -> the training dataloader needs to be prepared before we grab his length below (cause its length will be
-    # shorter in multiprocess)
-
-    # Scheduler and math around the number of training steps.
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-    if args.max_train_steps is None:
-        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-    else:
-        args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
-
-    checkpointing_steps = args.checkpointing_steps
-    if checkpointing_steps is not None:
-        checkpointing_steps = int(checkpointing_steps)
-
-    lr_scheduler = get_scheduler(
-        name=args.lr_scheduler_type,
-        optimizer=optimizer,
-        num_warmup_steps=args.num_warmup_steps,
-        num_training_steps=args.max_train_steps,
+    gpt2_model, gpt2_model_ref, gpt2_tox_model, train_dataloader, eval_dataloader = accelerator.prepare(
+        gpt2_model, gpt2_model_ref, gpt2_tox_model, train_dataloader, eval_dataloader
     )
 
-    # Train!
-    total_batch_size = args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+    ### TRAINING LOOP
+    ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, tokenizer, **config)
+    total_ppo_epochs = int(np.ceil(config["steps"] / config['batch_size']))
 
-    logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(train_dataset)}")
-    logger.info(f"  Num Epochs = {args.num_train_epochs}")
-    logger.info(f"  Instantaneous batch size per device = {args.per_device_train_batch_size}")
-    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
-    logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
-    logger.info(f"  Total optimization steps = {args.max_train_steps}")
-    # Only show the progress bar once on each machine.
-    progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
-    completed_steps = 0
-    losses_for_plots = []
-    sample_every = 200
-    step_counts = 0
+    def toxic_tokenize(texts):
+        res = tokenizer(texts, max_length=config["txt_in_max_len"] + config["txt_out_max_len"], pad_to_max_length=True,
+                        return_tensors="pt").to(accelerator.device)
+        res["labels"] = torch.tensor(res["input_ids"]).masked_fill(torch.tensor(res["attention_mask"]) == 0, -100).to(
+            accelerator.device)
+        return res
 
-    for epoch in range(args.num_train_epochs):
-        model.train()
-        for step, batch in enumerate(train_dataloader):
-            if args.analyze_answers and step_counts % sample_every == 0:
-                print('  Batch {:>5,}  of  {:>5,}.'.format(step, len(train_dataloader)), flush=True)
-                model.eval()
-                for sample_step, sample_batch in enumerate(anal_dataloader):
-                    temp_ids = sample_batch["input_ids"]
-                    temp_ids = temp_ids[temp_ids != tokenizer.pad_token_id].unsqueeze(0)
-                    sample_output = model.generate(
-                        input_ids=temp_ids,
-                        do_sample=True,
-                        top_k=50,
-                        max_length=200,
-                        num_return_sequences=1
-                    )
-                    gen_sent = tokenizer.decode(sample_output[0])
-                    print(gen_sent, flush=True)
-                model.train()
-            step_counts += 1
-            outputs = model(**batch)
-            loss = outputs.loss
-            loss = loss / args.gradient_accumulation_steps
-            accelerator.backward(loss)
-            if step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
-                progress_bar.update(1)
-                completed_steps += 1
+    for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(train_dataloader))):
+        logs, timing = dict(), dict()
+        t0 = time.time()
+        query_tensors = batch["tokens"].long()
 
-            if completed_steps % checkpointing_steps == 0:
-                output_dir = f"step_{completed_steps}"
-                if args.output_dir is not None:
-                    output_dir = os.path.join(args.output_dir, output_dir)
-                print("Checkpointing..", flush=True)
-                print("Loss:", loss, flush=True)
-                accelerator.save_state(output_dir)
+        #### Get response from gpt2
+        t = time.time()
+        response_tensors = []
+        for i in range(config['batch_size']):
+            gen_len = output_size()
+            response = gpt2_model.generate(query_tensors[i].unsqueeze(dim=0),
+                                           max_new_tokens=gen_len, **gen_kwargs)
+            response_tensors.append(response.squeeze()[-gen_len:])
+        batch['response'] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+        timing['time/get_response'] = time.time() - t
 
-            if completed_steps >= args.max_train_steps:
-                break
+        #### Compute Rewards
+        t = time.time()
+        texts = [q + r for q, r in zip(batch['query'], batch['response'])]
+        res = toxic_tokenize(texts)
+        with torch.no_grad():
+            rewards = torch.exp(gpt2_tox_model(**res).loss).to(accelerator.device)
+        timing['time/get_toxic_preds'] = time.time() - t
 
-        model.eval()
-        losses = []
-        for step, batch in enumerate(eval_dataloader):
-            with torch.no_grad():
-                outputs = model(**batch)
+        #### Run PPO step
+        t = time.time()
+        stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
+        timing['time/optimization'] = time.time() - t
 
-            loss = outputs.loss
-            losses.append(accelerator.gather(loss.repeat(args.per_device_eval_batch_size)))
-
-        losses = torch.cat(losses)
-        losses = losses[: len(eval_dataset)]
-        try:
-            perplexity = math.exp(torch.mean(losses))
-            loss_for_print = torch.mean(losses).item()
-        except OverflowError:
-            perplexity = float("inf")
-            loss_for_print = float("inf")
-
-        losses_for_plots.append(loss_for_print)
-        logger.info(f"epoch {epoch}: perplexity: {perplexity} loss: {loss_for_print}")
-
-        if args.push_to_hub and epoch < args.num_train_epochs - 1:
-            accelerator.wait_for_everyone()
-            unwrapped_model = accelerator.unwrap_model(model)
-            unwrapped_model.save_pretrained(args.output_dir, save_function=accelerator.save)
-            if accelerator.is_main_process:
-                tokenizer.save_pretrained(args.output_dir)
-                repo.push_to_hub(
-                    commit_message=f"Training in progress epoch {epoch}", blocking=False, auto_lfs_prune=True
-                )
+        #### Log everything
+        timing['time/epoch'] = time.time() - t0
+        table_rows = [list(r) for r in zip(batch['query'], batch['response'], rewards.cpu().tolist())]
+        logs.update({'game_log': wandb.Table(columns=['query', 'response', 'reward'], rows=table_rows)})
+        logs.update(timing)
+        logs.update(stats)
+        logs['env/reward_mean'] = torch.mean(rewards).cpu().numpy()
+        logs['env/reward_std'] = torch.std(rewards).cpu().numpy()
+        logs['env/reward_dist'] = rewards.cpu().numpy()
+        wandb.log(logs)
 
     if args.output_dir is not None:
         accelerator.wait_for_everyone()
-        unwrapped_model = accelerator.unwrap_model(model)
+        unwrapped_model = accelerator.unwrap_model(gpt2_model)
         unwrapped_model.save_pretrained(args.output_dir, save_function=accelerator.save)
         if accelerator.is_main_process:
             tokenizer.save_pretrained(args.output_dir)
             if args.push_to_hub:
                 repo.push_to_hub(commit_message="End of training", auto_lfs_prune=True)
-        pickle.dump(losses_for_plots, open(os.path.join(args.output_dir, "losses.pkl"), "wb"))
 
 
 if __name__ == "__main__":
