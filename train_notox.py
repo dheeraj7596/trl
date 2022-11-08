@@ -481,12 +481,15 @@ def main():
     for index in random.sample(range(len(train_dataset)), 3):
         logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
+    def collater(data):
+        return dict((key, [d[key] for d in data]) for key in data[0])
+
     # DataLoaders creation:
     train_dataloader = DataLoader(
-        train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=config["batch_size"]
+        train_dataset, shuffle=True, collate_fn=collater, batch_size=config["batch_size"]
     )
     eval_dataloader = DataLoader(
-        eval_dataset, collate_fn=default_data_collator, batch_size=config["batch_size"]
+        eval_dataset, collate_fn=collater, batch_size=config["batch_size"]
     )
 
     gpt2_model, gpt2_model_ref, gpt2_tox_model, train_dataloader, eval_dataloader = accelerator.prepare(
@@ -507,7 +510,7 @@ def main():
     for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(train_dataloader))):
         logs, timing = dict(), dict()
         t0 = time.time()
-        query_tensors = batch["tokens"].long()
+        query_tensors = [torch.tensor(t).long().to(accelerator.device) for t in batch["tokens"]]
 
         #### Get response from gpt2
         t = time.time()
@@ -519,6 +522,7 @@ def main():
             response_tensors.append(response.squeeze()[-gen_len:])
         batch['response'] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
         timing['time/get_response'] = time.time() - t
+        print("Response", batch['response'])
 
         #### Compute Rewards
         t = time.time()
