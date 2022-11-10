@@ -253,7 +253,7 @@ def main():
         "txt_out_min_len": 30,
         "txt_out_max_len": 100,
         "lr": 1.41e-5,
-        "init_kl_coef": 0.2,
+        "init_kl_coef": 0.8,
         "target": 6,
         "horizon": 10000,
         "gamma": 1,
@@ -486,10 +486,10 @@ def main():
 
     # DataLoaders creation:
     train_dataloader = DataLoader(
-        train_dataset, shuffle=True, collate_fn=collater, batch_size=config["batch_size"]
+        train_dataset, shuffle=True, collate_fn=collater, batch_size=config["batch_size"], drop_last=True
     )
     eval_dataloader = DataLoader(
-        eval_dataset, collate_fn=collater, batch_size=config["batch_size"]
+        eval_dataset, collate_fn=collater, batch_size=config["batch_size"], drop_last=True
     )
 
     gpt2_model, gpt2_model_ref, gpt2_tox_model, train_dataloader, eval_dataloader = accelerator.prepare(
