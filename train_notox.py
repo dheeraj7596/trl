@@ -246,7 +246,7 @@ def main():
         "model_name": "gpt2",
         "steps": 20000,
         "batch_size": 128,
-        "forward_batch_size": 16,
+        "forward_batch_size": 8,
         "ppo_epochs": 4,
         "txt_in_min_len": 10,
         "txt_in_max_len": 30,
