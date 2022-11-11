@@ -247,13 +247,13 @@ def main():
     config = {
         "model_name": "gpt2",
         "steps": 20000,
-        "batch_size": 64,
-        "forward_batch_size": 8,
+        "batch_size": 128,
+        "forward_batch_size": 16,
         "ppo_epochs": 4,
         "txt_in_min_len": 10,
         "txt_in_max_len": 30,
-        "txt_out_min_len": 150,
-        "txt_out_max_len": 200,
+        "txt_out_min_len": 30,
+        "txt_out_max_len": 100,
         "lr": 1.41e-5,
         "init_kl_coef": 0.8,
         "target": 6,
@@ -553,7 +553,7 @@ def main():
             loss_vec = loss_vec.reshape((batch_size, -1))
             loss_vec = loss_vec.sum(axis=-1) / np.count_nonzero(loss_vec, axis=-1)
             # rewards = torch.tensor(np.exp(loss_vec)).to(accelerator.device)
-            rewards = (torch.tensor(loss_vec) + distinct_scores).to(accelerator.device)
+            rewards = (torch.tensor(loss_vec) + 0.2 * distinct_scores).to(accelerator.device)
         timing['time/get_toxic_preds'] = time.time() - t
 
         #### Run PPO step
