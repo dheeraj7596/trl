@@ -369,23 +369,23 @@ def main():
             print("Batch finished", batch_count, "out of", int(len(test_dataset) / args.per_device_eval_batch_size),
                   flush=True)
         with torch.no_grad():
-            # output_sequences = model.generate(
-            #     **batch,
-            #     do_sample=True,
-            #     top_k=10,
-            #     max_length=min(len(batch["input_ids"][0]) + 200, tokenizer.model_max_length),
-            #     num_return_sequences=1,
-            #     pad_token_id=tokenizer.eos_token_id
-            # )
             output_sequences = model.generate(
                 **batch,
+                do_sample=True,
+                top_k=10,
                 max_length=min(len(batch["input_ids"][0]) + 200, tokenizer.model_max_length),
-                num_beams=5,
-                no_repeat_ngram_size=3,
                 num_return_sequences=1,
-                pad_token_id=tokenizer.eos_token_id,
-                early_stopping=True
+                pad_token_id=tokenizer.eos_token_id
             )
+            # output_sequences = model.generate(
+            #     **batch,
+            #     max_length=min(len(batch["input_ids"][0]) + 200, tokenizer.model_max_length),
+            #     num_beams=5,
+            #     no_repeat_ngram_size=3,
+            #     num_return_sequences=1,
+            #     pad_token_id=tokenizer.eos_token_id,
+            #     early_stopping=True
+            # )
             outputs = [tokenizer.decode(x, skip_special_tokens=True) for x in output_sequences]
             gen_seqs += outputs
         batch_count += 1
