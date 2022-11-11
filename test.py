@@ -46,7 +46,6 @@ from transformers import (
     MODEL_MAPPING,
     AdamW,
     AutoConfig,
-    AutoModelForCausalLM,
     AutoTokenizer,
     SchedulerType,
     default_data_collator,
@@ -54,6 +53,7 @@ from transformers import (
     set_seed,
 )
 # from transformers.file_utils import get_full_repo_name
+from trl.gpt2 import GPT2HeadWithValueModel
 from transformers.utils.versions import require_version
 
 logger = logging.getLogger(__name__)
@@ -313,14 +313,13 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
 
     if args.model_name_or_path:
-        model = AutoModelForCausalLM.from_pretrained(
+        model = GPT2HeadWithValueModel.from_pretrained(
             args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
             config=config,
         )
     else:
         logger.info("Training new model from scratch")
-        model = AutoModelForCausalLM.from_config(config)
+        model = GPT2HeadWithValueModel.from_config(config)
 
     model.resize_token_embeddings(len(tokenizer))
 
