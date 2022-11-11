@@ -29,6 +29,8 @@ import time
 import random
 from itertools import chain
 import numpy as np
+import nltk
+from nltk import bigrams
 
 import datasets
 import torch
@@ -508,6 +510,16 @@ def main():
             accelerator.device)
         return res
 
+    def compute_distinct_score(text):
+        tokens = nltk.word_tokenize(text)
+        tokens = [token.lower() for token in tokens if len(token) > 1]  # same as unigrams
+        unigram_count = len(set(tokens))
+        bi_tokens = bigrams(tokens)
+        total_bigram_count = len(list(bi_tokens))
+        bi_tokens = bigrams(tokens)
+        bigram_count = len(set(bi_tokens))
+        return np.mean([unigram_count / len(tokens), bigram_count / total_bigram_count])
+
     loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
     for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(train_dataloader))):
         logs, timing = dict(), dict()
@@ -528,6 +540,7 @@ def main():
         #### Compute Rewards
         t = time.time()
         texts = [q + r for q, r in zip(batch['query'], batch['response'])]
+        distinct_scores = np.array([compute_distinct_score(text) for text in texts])
         res = toxic_tokenize(texts)
         batch_size = len(texts)
         with torch.no_grad():
@@ -540,7 +553,7 @@ def main():
             loss_vec = loss_vec.reshape((batch_size, -1))
             loss_vec = loss_vec.sum(axis=-1) / np.count_nonzero(loss_vec, axis=-1)
             # rewards = torch.tensor(np.exp(loss_vec)).to(accelerator.device)
-            rewards = torch.tensor(loss_vec).to(accelerator.device)
+            rewards = (torch.tensor(loss_vec) + distinct_scores).to(accelerator.device)
         timing['time/get_toxic_preds'] = time.time() - t
 
         #### Run PPO step
