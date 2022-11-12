@@ -553,7 +553,9 @@ def main():
             loss_vec = loss_vec.reshape((batch_size, -1))
             loss_vec = loss_vec.sum(axis=-1) / np.count_nonzero(loss_vec, axis=-1)
             # rewards = torch.tensor(np.exp(loss_vec)).to(accelerator.device)
-            rewards = (torch.tensor(loss_vec) + 0.2 * distinct_scores).to(accelerator.device)
+            rewards = torch.tensor(loss_vec) + 0.2 * distinct_scores
+            rewards[(rewards < 3) | (rewards > 4)] = 0.0
+            rewards = rewards.to(accelerator.device)
         timing['time/get_toxic_preds'] = time.time() - t
 
         #### Run PPO step
