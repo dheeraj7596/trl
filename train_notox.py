@@ -518,7 +518,10 @@ def main():
         total_bigram_count = len(list(bi_tokens))
         bi_tokens = bigrams(tokens)
         bigram_count = len(set(bi_tokens))
-        return np.mean([unigram_count / len(tokens), bigram_count / total_bigram_count])
+        if total_bigram_count == 0 or len(tokens) == 0:
+            return -3
+        else:
+            return np.mean([unigram_count / len(tokens), bigram_count / total_bigram_count])
 
     loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
     for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(train_dataloader))):
