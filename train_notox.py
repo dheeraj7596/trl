@@ -254,7 +254,7 @@ def main():
         "txt_in_max_len": 30,
         "txt_out_min_len": 30,
         "txt_out_max_len": 100,
-        "lr": 1.41e-5,
+        "lr": 5e-6,
         "init_kl_coef": 0.99,
         "target": 6,
         "horizon": 10000,
@@ -543,8 +543,8 @@ def main():
         #### Compute Rewards
         t = time.time()
         texts = [q + r for q, r in zip(batch['query'], batch['response'])]
-        # distinct_scores = np.array([compute_distinct_score(text) for text in texts])
-        distinct_scores = 0
+        distinct_scores = np.array([compute_distinct_score(text) for text in texts])
+        # distinct_scores = 0
         res = toxic_tokenize(texts)
         batch_size = len(texts)
         with torch.no_grad():
@@ -558,7 +558,7 @@ def main():
             loss_vec = loss_vec.sum(axis=-1) / np.count_nonzero(loss_vec, axis=-1)
             # rewards = torch.tensor(np.exp(loss_vec)).to(accelerator.device)
             rewards = torch.tensor(loss_vec) + 0.2 * distinct_scores
-            # rewards[(rewards < 3) | (rewards > 4)] = -3
+            rewards[(rewards < 3) | (rewards > 4)] = -30
             rewards = rewards.to(accelerator.device)
         timing['time/get_toxic_preds'] = time.time() - t
 
