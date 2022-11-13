@@ -254,7 +254,7 @@ def main():
         "txt_in_max_len": 30,
         "txt_out_min_len": 30,
         "txt_out_max_len": 100,
-        "lr": 1.41e-5,
+        "lr": 1.41e-6,
         "init_kl_coef": 0.8,
         "target": 6,
         "horizon": 10000,
