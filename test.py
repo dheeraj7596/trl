@@ -373,7 +373,7 @@ def main():
                 **batch,
                 do_sample=True,
                 top_k=10,
-                max_length=min(len(batch["input_ids"][0]) + 200, tokenizer.model_max_length),
+                max_length=min(len(batch["input_ids"][0]) + 100, tokenizer.model_max_length),
                 num_return_sequences=1,
                 pad_token_id=tokenizer.eos_token_id
             )
