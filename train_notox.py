@@ -257,7 +257,7 @@ def main():
         "lr": 5e-6,
         "init_kl_coef": 0.99,
         "target": 6,
-        "horizon": 10000,
+        "horizon": 10,
         "gamma": 1,
         "lam": 0.95,
         "cliprange": .2,
