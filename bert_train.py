@@ -103,14 +103,6 @@ def parse_args():
         help="If passed, will predict on test_file",
     )
     parser.add_argument(
-        "--early_stop",
-        type=int,
-        default=1,
-        help=(
-            "Early stop or not"
-        ),
-    )
-    parser.add_argument(
         "--pad_to_max_length",
         action="store_true",
         help="If passed, pad all samples to `max_length`. Otherwise, dynamic padding is used.",
@@ -481,15 +473,7 @@ def main():
             args.num_train_epochs -= resume_step // len(train_dataloader)
             resume_step = (args.num_train_epochs * len(train_dataloader)) - resume_step
 
-    counter = 0
-    patience = args.patience
-    best_score = None
-    early_stop = False
-
     for epoch in range(args.num_train_epochs):
-        if early_stop:
-            logger.info("Early stopping!!")
-            break
         model.train()
         if args.with_tracking:
             total_loss = 0
@@ -534,29 +518,6 @@ def main():
         eval_metric = metric.compute()
         logger.info(f"epoch {epoch}: {eval_metric}")
 
-        if args.early_stop:
-            if best_score is None:
-                best_score = eval_metric["accuracy"]
-                accelerator.wait_for_everyone()
-                unwrapped_model = accelerator.unwrap_model(model)
-                unwrapped_model.save_pretrained(args.output_dir, save_function=accelerator.save)
-                if accelerator.is_main_process:
-                    tokenizer.save_pretrained(args.output_dir)
-            elif eval_metric["accuracy"] <= best_score:
-                counter += 1
-                logger.info(f'EarlyStopping counter: {counter} out of {patience}')
-                if counter >= patience:
-                    early_stop = True
-            else:
-                counter = 0
-                best_score = eval_metric["accuracy"]
-                logger.info("Best dev result: {}".format(best_score))
-                accelerator.wait_for_everyone()
-                unwrapped_model = accelerator.unwrap_model(model)
-                unwrapped_model.save_pretrained(args.output_dir, save_function=accelerator.save)
-                if accelerator.is_main_process:
-                    tokenizer.save_pretrained(args.output_dir)
-
         if args.with_tracking:
             accelerator.log(
                 {
@@ -580,7 +541,7 @@ def main():
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
 
-    if not args.early_stop:
+    if not args.do_predict:
         accelerator.wait_for_everyone()
         unwrapped_model = accelerator.unwrap_model(model)
         unwrapped_model.save_pretrained(args.output_dir, save_function=accelerator.save)
