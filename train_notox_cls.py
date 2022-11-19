@@ -52,6 +52,8 @@ from transformers import (
     default_data_collator,
     get_scheduler,
     set_seed,
+    BertForSequenceClassification,
+    BertTokenizerFast
 )
 from trl.gpt2 import GPT2HeadWithValueModel
 from trl.ppo import PPOTrainer
@@ -111,6 +113,12 @@ def parse_args():
     )
     parser.add_argument(
         "--model_name_or_path",
+        type=str,
+        help="Path to pretrained model or model identifier from huggingface.co/models.",
+        required=True,
+    )
+    parser.add_argument(
+        "--cls_name_or_path",
         type=str,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
         required=True,
@@ -247,17 +255,17 @@ def main():
     config = {
         "model_name": "gpt2",
         "steps": 20000,
-        "batch_size": 128,
+        "batch_size": 256,
         "forward_batch_size": 16,
         "ppo_epochs": 4,
-        "txt_in_min_len": 10,
-        "txt_in_max_len": 30,
-        "txt_out_min_len": 30,
-        "txt_out_max_len": 100,
-        "lr": 5e-6,
-        "init_kl_coef": 0.99,
+        "txt_in_min_len": 2,
+        "txt_in_max_len": 8,
+        "txt_out_min_len": 4,
+        "txt_out_max_len": 16,
+        "lr": 1.41e-5,
+        "init_kl_coef": 0.2,
         "target": 6,
-        "horizon": 10,
+        "horizon": 10000,
         "gamma": 1,
         "lam": 0.95,
         "cliprange": .2,
@@ -387,6 +395,9 @@ def main():
     gpt2_model_ref.resize_token_embeddings(len(tokenizer))
     gpt2_tox_model.resize_token_embeddings(len(tokenizer))
 
+    bert_model = BertForSequenceClassification.from_pretrained(args.cls_name_or_path, num_labels=2)
+    bert_tokenizer = BertTokenizerFast.from_pretrained(args.cls_name_or_path)
+
     if USE_WANDB:
         wandb.watch(gpt2_model, log='all')
 
@@ -510,6 +521,20 @@ def main():
             accelerator.device)
         return res
 
+    def bert_tokenize(texts):
+        temp = bert_tokenizer(
+            texts,
+            add_special_tokens=True,  # Add '[CLS]' and '[SEP]'
+            max_length=(config["txt_in_max_len"] + config["txt_out_max_len"]),
+            pad_to_max_length=True,
+            return_attention_mask=True,  # Construct attn. masks.
+            return_tensors='pt',  # Return pytorch tensors.
+        ).to(accelerator.device)
+        # Print sentence 0, now as a list of IDs.
+        # print('Original: ', sentences[0])
+        # print('Token IDs:', input_ids[0])
+        return temp
+
     def compute_distinct_score(text):
         tokens = nltk.word_tokenize(text)
         tokens = [token.lower() for token in tokens if len(token) > 1]  # same as unigrams
@@ -543,22 +568,14 @@ def main():
         #### Compute Rewards
         t = time.time()
         texts = [q + r for q, r in zip(batch['query'], batch['response'])]
-        distinct_scores = np.array([compute_distinct_score(text) for text in texts])
-        # distinct_scores = 0
-        res = toxic_tokenize(texts)
+        # distinct_scores = np.array([compute_distinct_score(text) for text in texts])
+        distinct_scores = 0
+        res = bert_tokenize(texts)
         batch_size = len(texts)
         with torch.no_grad():
-            outputs = gpt2_tox_model(**res)
-            lm_logits = outputs.logits
-            shift_logits = lm_logits[..., :-1, :].contiguous()
-            shift_labels = res['labels'][..., 1:].contiguous()
-            loss_vec = loss_fct(shift_logits.view(-1, shift_logits.size(-1)),
-                                shift_labels.view(-1)).detach().cpu().numpy()
-            loss_vec = loss_vec.reshape((batch_size, -1))
-            loss_vec = loss_vec.sum(axis=-1) / np.count_nonzero(loss_vec, axis=-1)
-            # rewards = torch.tensor(np.exp(loss_vec)).to(accelerator.device)
-            rewards = torch.tensor(loss_vec) + 0.2 * distinct_scores
-            rewards[(rewards < 3) | (rewards > 4)] = -30
+            outputs = bert_model(**res)
+            rewards = outputs.logits[:, 1]
+            # rewards = rewards + 0.2 * distinct_scores
             rewards = rewards.to(accelerator.device)
         timing['time/get_toxic_preds'] = time.time() - t
 
