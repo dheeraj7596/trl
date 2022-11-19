@@ -505,8 +505,8 @@ def main():
         eval_dataset, collate_fn=collater, batch_size=config["batch_size"], drop_last=True
     )
 
-    gpt2_model, gpt2_model_ref, gpt2_tox_model, train_dataloader, eval_dataloader = accelerator.prepare(
-        gpt2_model, gpt2_model_ref, gpt2_tox_model, train_dataloader, eval_dataloader
+    gpt2_model, gpt2_model_ref, gpt2_tox_model, bert_model, train_dataloader, eval_dataloader = accelerator.prepare(
+        gpt2_model, gpt2_model_ref, gpt2_tox_model, bert_model, train_dataloader, eval_dataloader
     )
 
     ### TRAINING LOOP
