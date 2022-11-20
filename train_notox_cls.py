@@ -385,15 +385,9 @@ def main():
 
     gpt2_model = GPT2HeadWithValueModel.from_pretrained('gpt2')
     gpt2_model_ref = GPT2HeadWithValueModel.from_pretrained('gpt2')
-    gpt2_tox_model = AutoModelForCausalLM.from_pretrained(
-        args.model_name_or_path,
-        from_tf=bool(".ckpt" in args.model_name_or_path),
-        config=tox_config,
-    )
 
     gpt2_model.resize_token_embeddings(len(tokenizer))
     gpt2_model_ref.resize_token_embeddings(len(tokenizer))
-    gpt2_tox_model.resize_token_embeddings(len(tokenizer))
 
     bert_model = BertForSequenceClassification.from_pretrained(args.cls_name_or_path, num_labels=2)
     bert_tokenizer = BertTokenizerFast.from_pretrained(args.cls_name_or_path)
@@ -505,8 +499,8 @@ def main():
         eval_dataset, collate_fn=collater, batch_size=config["batch_size"], drop_last=True
     )
 
-    gpt2_model, gpt2_model_ref, gpt2_tox_model, bert_model, train_dataloader, eval_dataloader = accelerator.prepare(
-        gpt2_model, gpt2_model_ref, gpt2_tox_model, bert_model, train_dataloader, eval_dataloader
+    gpt2_model, gpt2_model_ref, bert_model, train_dataloader, eval_dataloader = accelerator.prepare(
+        gpt2_model, gpt2_model_ref, bert_model, train_dataloader, eval_dataloader
     )
 
     ### TRAINING LOOP
