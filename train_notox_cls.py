@@ -551,12 +551,12 @@ def main():
     loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
     for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(train_dataloader))):
         if epoch > 0 and epoch % 10 == 0:
-            os.makedirs(os.path.join(args.output_dir, epoch), exist_ok=True)
+            os.makedirs(os.path.join(args.output_dir, str(epoch)), exist_ok=True)
             accelerator.wait_for_everyone()
             unwrapped_model = accelerator.unwrap_model(gpt2_model)
-            unwrapped_model.save_pretrained(os.path.join(args.output_dir, epoch), save_function=accelerator.save)
+            unwrapped_model.save_pretrained(os.path.join(args.output_dir, str(epoch)), save_function=accelerator.save)
             if accelerator.is_main_process:
-                tokenizer.save_pretrained(os.path.join(args.output_dir, epoch))
+                tokenizer.save_pretrained(os.path.join(args.output_dir, str(epoch)))
             gpt2_model = accelerator.prepare(unwrapped_model)
         logs, timing = dict(), dict()
         t0 = time.time()
