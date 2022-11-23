@@ -255,13 +255,13 @@ def main():
         "txt_out_min_len": 30,
         "txt_out_max_len": 100,
         "lr": 1.41e-5,
-        "init_kl_coef": 0.8,
+        "init_kl_coef": 0.1,
         "target": 6,
         "horizon": 10000,
         "gamma": 1,
         "lam": 0.95,
-        "cliprange": .8,
-        "cliprange_value": .8,
+        "cliprange": .2,
+        "cliprange_value": .2,
         "vf_coef": .1,
     }
 
