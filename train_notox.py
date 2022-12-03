@@ -52,6 +52,7 @@ from transformers import (
     default_data_collator,
     get_scheduler,
     set_seed,
+    top_k_top_p_filtering
 )
 from trl.gpt2 import GPT2HeadWithValueModel
 from trl.ppo import PPOTrainer
@@ -523,6 +524,20 @@ def main():
         else:
             return np.mean([unigram_count / len(tokens), bigram_count / total_bigram_count])
 
+    def respond_to_batch(model, queries, txt_len=20, top_k=0, top_p=1.0):
+        """Sample text from language model."""
+        input_ids = queries
+        for i in range(txt_len):
+            # Get Logits
+            outputs = model(input_ids)
+            next_token_logits = outputs[0][:, -1, :]
+            next_token_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
+            # Sample
+            probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
+            input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
+        return input_ids[:, -txt_len:]
+
     loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
     for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(train_dataloader))):
         logs, timing = dict(), dict()
@@ -534,9 +549,11 @@ def main():
         response_tensors = []
         for i in range(config['batch_size']):
             gen_len = output_size()
-            response = gpt2_model.generate(query_tensors[i].unsqueeze(dim=0),
-                                           max_length=len(query_tensors[i]) + gen_len, **gen_kwargs)
-            response_tensors.append(response.squeeze()[-gen_len:])
+            response = respond_to_batch(gpt2_model, query_tensors[i].unsqueeze(dim=0), gen_len)
+            response_tensors.append(response.squeeze())
+            # response = gpt2_model.generate(query_tensors[i].unsqueeze(dim=0),
+            #                                max_length=len(query_tensors[i]) + gen_len, **gen_kwargs)
+            # response_tensors.append(response.squeeze()[-gen_len:])
         batch['response'] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
         timing['time/get_response'] = time.time() - t
 
